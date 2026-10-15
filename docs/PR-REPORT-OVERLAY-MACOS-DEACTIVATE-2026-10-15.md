@@ -144,9 +144,11 @@ from .platform_mac import _keep_macos_tool_window_visible, _mac_no_window_shadow
 | 新增两条用例 | `pytest -q tests/test_overlay_window.py -k "deactivates or qt_tool_flag"` | **2 passed, 18 deselected** |
 | 断言有效性（红→绿） | `git stash push pet/overlay_window.py` 后重跑上面的 `-k deactivates` | **1 failed** —— `AssertionError: assert False is True`（`testAttribute(WA_MacAlwaysShowToolWindow)` 为 False），精确红在缺属性那一行 |
 | 既有 legacy 用例未被影响 | `pytest -q tests/test_desktop_pet_features.py -k macos_tool_window` | **1 passed** |
-| 全量 | `python -m pytest -q` | **未跑**（见下） |
+| 全量 | `python -m pytest -q` | **第一轮未跑**（见下）；**第二轮已补跑 → 1 failed / 7456 passed / 69 skipped**，唯一失败经基线对照证实与本 PR 无关（§九） |
 
 **关于「未跑全量」的诚实登记**：本机只建了最小复现环境（`.venv` 内仅 `PySide6==6.12.0` + `pytest` + `ruff`），用于跑上面的聚焦门；`requirements.txt` 里的 `numpy / rapidocr / onnxruntime / opencv` 等未安装，全量套件在本机跑不起来。本改动是构造期一行属性下发、不触及数据模型/配置迁移/生命周期/线程/平台分派以外的分支，按 `AGENTS.md`「聚焦加相关测试」口径提交，**全量门交由 CI 执行**。
+
+> **后续（第二轮）已补全**：装上 `requirements.txt` 全量依赖后跑完整套件，结果为 1 failed / 7456 passed / 69 skipped；唯一失败在 pristine `main` 上同样复现，属基线既有。详见 §九「第二轮的完整套件结果」。
 
 ## 七、已知限制与后续
 
@@ -214,7 +216,7 @@ from .platform_mac import _keep_macos_tool_window_visible, _mac_no_window_shadow
 | 聚焦 | `pytest -q tests/test_overlay_window.py` | **21 passed, 1 skipped**（第一轮 19+1，本轮 +2） |
 | 红→绿（本轮改动） | 只删掉 `showEvent` 里那一行调用后重跑 `-k pushes_native` | **1 failed —— 断言失败**（"showEvent 没有下发原生 setHidesOnDeactivate:NO"），恢复后 1 passed |
 | 真 cocoa 正确性 | 见上表 | 下发返回 **True** |
-| 全量 | `python -m pytest -q` | **仍未跑**（本机最小环境缺 numpy/rapidocr 等，交 CI） |
+| 全量 | `python -m pytest -q` | **已跑 → 见本节末「第二轮的完整套件结果」**：1 failed / 7456 passed / 69 skipped |
 
 ### 第二轮的一处自我更正
 
