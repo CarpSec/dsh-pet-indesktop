@@ -3,7 +3,7 @@
 > **基线**：`579b401`（2026-10-15，`main`）
 > **分支**：`fix/overlay-macos-deactivate-visibility`　**日期**：2026-10-15
 > **范围**：2 个文件（实现 1、测试 1）
-> **关联**：[`PR-REPORT-BUBBLE-ON-TOP-2026-10-13.md`](PR-REPORT-BUBBLE-ON-TOP-2026-10-13.md)（其中已登记「`WA_MacAlwaysShowToolWindow` 路径未验；overlay 拓扑行为不变故未验」）、issue #229 同族的 `platform_mac` 平台层
+> **关联**：[`PR-REPORT-BUBBLE-ON-TOP-2026-10-13.md`](PR-REPORT-BUBBLE-ON-TOP-2026-10-13.md)（其中已登记「`WA_MacAlwaysShowToolWindow` 路径未验；overlay 拓扑行为不变故未验」）、issue #229 同族的 `platform_mac` 平台层、issue [#262](https://github.com/MerZlin/dsh-pet-indesktop/issues/262)（同根因的独立记录，§九 据它加强）、issue [#275](https://github.com/MerZlin/dsh-pet-indesktop/issues/275)（legacy 路径的鼠标缺陷，与本 PR 无关）
 
 ## 一、核心特性
 
@@ -47,8 +47,8 @@ $ git log -S "WA_MacAlwaysShowToolWindow" -- pet/overlay_window.py
 
 ### 未改动（明确说明）
 
-- `pet/window.py`（legacy）：**没动**。它一直是对的，本改动是让 overlay 与它对齐。
-- `pet/platform_mac.py`：**没动**。helper 本身正确；问题在调用点缺失。
+- `pet/window.py`（legacy）：**没动**。**在这条可见性修复上**它一直是对的（一直调用 `_keep_macos_tool_window_visible`），本改动是让 overlay 与它对齐。⚠️ 但不要把这句话读成"legacy 一切都对"——第二轮真机排查发现 **legacy 的鼠标交互在 macOS 上另有独立缺陷**（拖动不生效、点击被误判成拖动导致无气泡、右键菜单需换窗口标志），详见 §九 与另立的 issue。
+- `pet/platform_mac.py`：**第一轮没动**（helper 本身正确，问题在调用点缺失）；**第二轮新增** `_mac_set_hides_on_deactivate`（见 §九）。
 - `pet/overlay_shell.py`：**没动**。在 `OverlayWindow` 构造处修即可覆盖 shell 的全部创建路径（shell 只 `OverlayWindow(...)` 构造，不自行拼窗口），无需第二处调用。
 - `pet/platform_passthrough.py` / `build_window_flags`：**没动**。与穿透、阴影无关。
 
@@ -161,3 +161,61 @@ from .platform_mac import _keep_macos_tool_window_visible, _mac_no_window_shadow
 - **开关**：无。没有新增配置键，**无配置迁移**。
 - **回滚**：`git revert` 即可，无落盘残留状态（不写文件、不写配置）。回滚后 overlay 桌宠恢复「切应用即被 Cocoa 隐藏」的既有行为，legacy 不受影响。
 - **签名 / 打包**：不涉及构建脚本、不改 `packaging/`、不新增随包二进制。
+
+-----
+
+## 九、第二轮改进（对齐 issue #262：补原生 `setHidesOnDeactivate:NO`）
+
+**触发**：提交后排查「按本 PR 思路切 legacy 拓扑绕过时，桌宠拖不动 / 点击无气泡 / 右键无菜单」的过程中，检索到仓库里已有的 [`#262 mac 焦点问题 && pet 隐藏问题 修复记录`](https://github.com/MerZlin/dsh-pet-indesktop/issues/262)（miku19960917，2026-10-13，macOS 26.2 真机）。该记录**独立报告了与本 PR 完全相同的根因**（"macOS 的 Cocoa 在 `Qt.Tool` 窗口所属应用失去焦点时自动隐藏它"），但多给出一条对本 PR 直接致命的实测结论：
+
+> **`WA_MacAlwaysShowToolWindow` 属性在 macOS 26 上不再生效**，`[NSWindow hidesOnDeactivate]` 默认返回 YES。
+
+#262 给出的修法是走原生：`[window setHidesOnDeactivate:NO]`（外加 `setCollectionBehavior`），且调用点在 `pet/window.py` **和** `pet/overlay_window.py` 的 `showEvent`。
+
+**为什么必须跟进**：本 PR 第一轮只补了 Qt 属性这一条路。若 #262 的结论成立（macOS 26 上属性不生效），那么本 PR 对 macOS 26 用户**等于没修**——而这正是本 PR 要解决的报障面。因此改为**两条路并存**，不替换：
+
+| 路径 | 生效条件 | 本机实测 |
+|---|---|---|
+| Qt 属性 `WA_MacAlwaysShowToolWindow`（第一轮，构造期） | 依赖 Qt 版本对该属性的实现 | macOS 27.2 上**有效**（legacy 拓扑带它 → 失活仍在屏；overlay 不带 → 在屏 2→0） |
+| 原生 `-[NSWindow setHidesOnDeactivate:] = NO`（第二轮，`showEvent`） | 与 Qt 版本无关，直写 Cocoa 真正的判据 | 真 cocoa 实测**下发返回 True**，且注入版 overlay 失活不再隐藏 |
+
+两条都留着：任一条在某个系统版本上失效，另一条仍然兜住。
+
+### 第二轮修改文件说明
+
+| 文件 | 增删（相对 `main` 累计） | 改动意图 |
+|---|---|---|
+| `pet/platform_mac.py` | **+58 / −0** | 新增 `_mac_set_hides_on_deactivate(view_id)`：照既有 `_mac_set_window_level` 的 ctypes/objc 口径（`sel_registerName` 必须声明 `restype=c_void_p` 以免截断 SEL 段错误；`BOOL` 必须用 `ctypes.c_bool` 而非 `c_long`），把 `-[NSWindow setHidesOnDeactivate:]` 置 NO。与既有 helper 同口径地**先判平台**：非 darwin 或非 cocoa 直接返回 False，绝不碰 objc（offscreen 下 `winId()` 不是 NSView 指针，objc_msgSend 会 SIGSEGV 且捕不到）。 |
+| `pet/overlay_window.py` | **+18 / −1**（含第一轮） | ① 第一轮：`__init__` 补 `_keep_macos_tool_window_visible(self)`；② 第二轮：`showEvent` 补 `_mac_set_hides_on_deactivate(int(self.winId()))` —— 必须在 `showEvent` 而非构造期，因为构造期 `winId()` 不指向就绪的 NSView。调用点**无条件调用**（不写 `if sys.platform=='darwin'`）：helper 在非 cocoa 平台本身就是安全 no-op，这样测试不必 patch 全进程级的 `sys.platform`。 |
+| `tests/test_overlay_window.py` | **+81 / −0** | 在第一轮 2 条之上新增 2 条：③ `test_overlay_show_event_pushes_native_hides_on_deactivate`（替换 helper 后断言 `show()` 确实调到它）；④ `test_mac_set_hides_on_deactivate_is_safe_off_cocoa`（offscreen 下必须返回 False 且不碰 objc —— 这条是防 SIGSEGV 的守卫，将来有人删掉平台判定会以**进程崩溃**而非断言失败的形式暴露）。 |
+
+### 第二轮性能分析
+
+**方法**：`QT_QPA_PLATFORM` 清空走真 cocoa，`QWidget` 上 `setWindowFlag(Tool)` 后 `show()` 取 `winId()`，循环调用取均值（N=20000）。环境：macOS 27.2 · Apple Silicon · CPython 3.13.15 · PySide6 6.12.0 · **platformName=cocoa**。
+
+| 指标 | 实测 | 归属 |
+|---|---|---|
+| 真 cocoa 下发是否成功 | `_mac_set_hides_on_deactivate(winId) -> True` | 新增（正确性） |
+| 单次成本 | **57.5 µs** | 新增 |
+| 触发频率 | **每次 `showEvent` 一次**（显示/重新显示时），非每帧、非每 tick | 新增 |
+
+**结论（逐条）**：
+
+1. **稳态开销**：无。不进入 tick/绘制路径。
+2. **新增路径绝对成本与频率**：57.5 µs / 次。注意这 **57.5 µs 里绝大部分不是 objc 调用本身，而是每次调用都重做 `ctypes.util.find_library('objc')` + `ctypes.cdll.LoadLibrary()`**——这与既有 `_mac_set_window_level` 的写法逐字一致（刻意不引入进程级缓存，免得又多一份全局状态）。按一次 show 计，相对 8 ms 帧预算 0.7%，且不在帧路径上。
+3. **新系统调用 / 网络 / 磁盘 / 线程**：无网络、无磁盘、无线程；多一次 `dlopen` 查找（库已加载，走缓存路径）。**刻意不新增 objc 线程或常驻缓存。**
+4. **内存与缓存**：无增长（无新增容器/缓存）。
+
+### 第二轮测试与验证
+
+| 门 | 命令 | 结果 |
+|---|---|---|
+| 静态检查 | `ruff check pet tests scripts` | **All checks passed!** |
+| 聚焦 | `pytest -q tests/test_overlay_window.py` | **21 passed, 1 skipped**（第一轮 19+1，本轮 +2） |
+| 红→绿（本轮改动） | 只删掉 `showEvent` 里那一行调用后重跑 `-k pushes_native` | **1 failed —— 断言失败**（"showEvent 没有下发原生 setHidesOnDeactivate:NO"），恢复后 1 passed |
+| 真 cocoa 正确性 | 见上表 | 下发返回 **True** |
+| 全量 | `python -m pytest -q` | **仍未跑**（本机最小环境缺 numpy/rapidocr 等，交 CI） |
+
+### 第二轮的一处自我更正
+
+第一轮报告 §二「未改动」里写过 `pet/window.py`（legacy）「它一直是对的」。这句话**只对"可见性修复"这一件事成立**，容易被读成 legacy 整体无恙。第二轮真机排查确认：**legacy 的鼠标交互在 macOS 上有独立缺陷**（拖动不生效；点击被 `DRAG_THRESHOLD(5)×scale(0.72)=3.6px` 的阈值误判成拖动，进而被 `_on_click()` 开头的 `if self._just_dragged: return` 吞掉点击动画与气泡；右键菜单还依赖窗口标志不是 `Tool`）。已把该表述就地改为限定语，并将这三个缺陷**另立 issue [#275](https://github.com/MerZlin/dsh-pet-indesktop/issues/275)**（不混进本 PR：它们与本 PR 要修的是两条不同路径上的两族问题，且改动面在 `pet/window.py`，与本 PR 无交集）。这也解释了为什么"按本 PR 思路切 legacy 绕过"是错的方向。

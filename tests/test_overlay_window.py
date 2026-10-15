@@ -751,3 +751,42 @@ def test_overlay_window_keeps_qt_tool_flag():
     finally:
         overlay.close()
         overlay.deleteLater()
+
+
+def test_overlay_show_event_pushes_native_hides_on_deactivate(monkeypatch):
+    """回归：``showEvent`` 必须下发原生 ``setHidesOnDeactivate:NO``（issue #262）。
+
+    为什么不能只靠构造期的 Qt 属性 ``WA_MacAlwaysShowToolWindow``：issue #262
+    （macOS 26.2 真机）反馈该属性不再生效、``[NSWindow hidesOnDeactivate]`` 仍为
+    YES，而原生属性才是 Cocoa 失活 order out 的**真正判据**。故两条路并存，这条
+    用例守住原生那一条：把 helper 换掉，断言 ``show()`` 确实调到了它。
+
+    不去 patch ``sys.platform``（那是全进程级改动、会污染同测其他分支）——helper
+    在非 cocoa 平台本身就是安全 no-op，所以调用点无条件调用，本用例在 offscreen
+    下同样成立。
+    """
+    import pet.overlay_window as overlay_mod
+
+    seen: list[int] = []
+    monkeypatch.setattr(overlay_mod, "_mac_set_hides_on_deactivate",
+                        lambda view_id: seen.append(view_id))
+    overlay = OverlayWindow()
+    try:
+        overlay.show()
+        assert seen, "showEvent 没有下发原生 setHidesOnDeactivate:NO"
+    finally:
+        overlay.close()
+        overlay.deleteLater()
+
+
+def test_mac_set_hides_on_deactivate_is_safe_off_cocoa():
+    """offscreen/minimal 下必须恒返回 False 且不碰 objc。
+
+    这条不是"顺手写的空断言"：``_mac_set_window_level`` 的既有结论是
+    offscreen 下 ``winId()`` 不是 NSView 指针，objc_msgSend 会**直接 SIGSEGV**
+    （try/except 捕不到）。故新 helper 必须与它同口径地先判平台——本用例就是那道
+    防线：一旦有人把平台判定删掉，这里会以进程崩溃而不是断言失败的形式暴露。
+    """
+    from pet.platform_mac import _mac_set_hides_on_deactivate
+
+    assert _mac_set_hides_on_deactivate(0) is False

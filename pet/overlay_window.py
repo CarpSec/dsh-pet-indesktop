@@ -45,7 +45,11 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from . import catalog
 from . import overlay_peripherals
-from .platform_mac import _keep_macos_tool_window_visible, _mac_no_window_shadow_flag
+from .platform_mac import (
+    _keep_macos_tool_window_visible,
+    _mac_no_window_shadow_flag,
+    _mac_set_hides_on_deactivate,
+)
 from .platform_passthrough import QtPerPixelInputController
 from .sprite_menu import build_sprite_menu
 from .sprite_slingshot import SlingshotController
@@ -191,6 +195,12 @@ class OverlayWindow(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        # macOS：原生关掉 hidesOnDeactivate（issue #262 / #273）。Cocoa 失活时
+        # order out 窗口的**真正判据**就是这个原生属性；Qt 属性
+        # （__init__ 里已下发的 WA_MacAlwaysShowToolWindow）在部分系统版本上被
+        # 反馈为不再生效，故两条路并存。必须在这里调用：showEvent 时 winId()
+        # 才指向就绪的 NSView，构造期拿不到。非 cocoa 平台本函数是安全 no-op。
+        _mac_set_hides_on_deactivate(int(self.winId()))
         self._refresh_tick_interval()  # V-6：显示时重读刷新率（电池 DRR）
         self._feed_dpr()               # V-11：DPR 由 overlay 统一喂
         self._arm_dpr_change_watch()   # D2/P1：屏 DPR 变化 → 重喂 + 重建
