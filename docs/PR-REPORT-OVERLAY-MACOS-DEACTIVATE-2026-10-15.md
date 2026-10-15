@@ -219,3 +219,30 @@ from .platform_mac import _keep_macos_tool_window_visible, _mac_no_window_shadow
 ### 第二轮的一处自我更正
 
 第一轮报告 §二「未改动」里写过 `pet/window.py`（legacy）「它一直是对的」。这句话**只对"可见性修复"这一件事成立**，容易被读成 legacy 整体无恙。第二轮真机排查确认：**legacy 的鼠标交互在 macOS 上有独立缺陷**（拖动不生效；点击被 `DRAG_THRESHOLD(5)×scale(0.72)=3.6px` 的阈值误判成拖动，进而被 `_on_click()` 开头的 `if self._just_dragged: return` 吞掉点击动画与气泡；右键菜单还依赖窗口标志不是 `Tool`）。已把该表述就地改为限定语，并将这三个缺陷**另立 issue [#275](https://github.com/MerZlin/dsh-pet-indesktop/issues/275)**（不混进本 PR：它们与本 PR 要修的是两条不同路径上的两族问题，且改动面在 `pet/window.py`，与本 PR 无交集）。这也解释了为什么"按本 PR 思路切 legacy 绕过"是错的方向。
+
+### 第二轮的完整套件结果（补齐 AGENTS.md 的 platform-branches 门）
+
+`AGENTS.md` 的 Change discipline 把 **platform branches** 列为"必须跑全量"的类别，本改动正是 darwin 分支。故第二轮补跑全量：
+
+**方法**：`QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q`
+**环境**：macOS 27.2 (26B5112a) · Apple Silicon · CPython 3.13.15 · PySide6 6.12.0
+
+| 项 | 结果 |
+|---|---|
+| 全量 | **1 failed, 7456 passed, 69 skipped**，耗时 754.38s（12:34） |
+| 唯一失败 | `tests/test_island_bevel_fade.py::test_sample_value_change_never_fades` |
+
+**该失败与本 PR 无关，且是上游基线上就存在的（已实证，不是推断）**：
+
+1. 单独复跑 3 次 —— **3/3 确定性失败**（不是 flaky）
+2. 在 **pristine `main`（`579b401`）的独立 worktree** 上跑同一条 —— **同样失败**；并在该 worktree 上确认 `pet/overlay_window.py` 与 `pet/platform_mac.py` 里本 PR 的新符号出现次数均为 **0**（即跑的确实是无本改动的基线代码）
+3. 失败原因与平台字体/文本度量有关，与窗口属性无因果关系：
+   ```
+   E   AssertionError: 取样点太少（36）
+   E   assert 36 >= 60
+   ```
+   该用例断言"换字前后渲染帧的差异像素数 ≥ 60"（`set_balance_info("峰谷", "余额 ¥88888.88")` → `"余额 ¥1.00"`）。差异点数是字体的函数，本机渲染出 36 个取样点。**属既有的环境敏感脆弱断言**，跨平台/跨字体不成立。
+
+**关于 CI**：本机是 Python 3.13.15，而本仓 CI 跑 Python 3.11（`.github/workflows/pr-test.yml`）——同一个用例在 3.11 + CI 字体环境下是否也红，需要 CI 侧的结论；无论哪种，与本 PR 的改动无关。
+
+**关于「受影响时序族满载 3 遍」**：本 PR 不涉及时序——改动只有"构造期一次 `setAttribute`"与"每次 `showEvent` 一次 objc 调用"，**不新增线程、定时器、队列或跨线程信号**，也没有任何受时序影响的路径，故该门不适用（如实登记，而非省略）。
