@@ -248,3 +248,13 @@ from .platform_mac import _keep_macos_tool_window_visible, _mac_no_window_shadow
 **关于 CI**：本机是 Python 3.13.15，而本仓 CI 跑 Python 3.11（`.github/workflows/pr-test.yml`）——同一个用例在 3.11 + CI 字体环境下是否也红，需要 CI 侧的结论；无论哪种，与本 PR 的改动无关。
 
 **关于「受影响时序族满载 3 遍」**：本 PR 不涉及时序——改动只有"构造期一次 `setAttribute`"与"每次 `showEvent` 一次 objc 调用"，**不新增线程、定时器、队列或跨线程信号**，也没有任何受时序影响的路径，故该门不适用（如实登记，而非省略）。
+
+**rebase 到最新上游后复跑（2026-10-15）**：上游在此期间合入了 `ed84359`（#274 主宠设置会话路由），本分支已 rebase 到其上（`docs/INDEX.md` 两行报告登记冲突按"两行都留"解决）。在 rebase 后的分支上重跑全量：
+
+| 项 | 结果 |
+|---|---|
+| 全量 | **1 failed, 7462 passed, 69 skipped**，耗时 707.48s（11:47） |
+| 唯一失败 | 同一条 `test_island_bevel_fade.py::test_sample_value_change_never_fades`（既有，非本 PR 引入） |
+| 相对 rebase 前 | passed 7456 → **7462**（+6，来自上游 #274 新增用例），失败集合不变 |
+
+即：rebase **没有引入任何新增失败**，且唯一失败与 rebase 前逐条一致。
