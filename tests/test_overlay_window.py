@@ -709,3 +709,45 @@ def test_rotated_sprite_at_misses_off_pixel_inside_bounds():
     probe = QPoint(int(clear.x()), int(clear.y()))
     assert bounds.contains(probe)
     assert overlay.sprite_at(probe) is None
+
+
+# ---------------------------------------------------------------- macOS 失活可见性
+def test_overlay_tool_window_stays_visible_when_application_deactivates(monkeypatch):
+    """回归：overlay 合成窗带 ``Qt.Tool``，Cocoa 在应用失活时会自动 order out 它。
+
+    真机症状（macOS，overlay 默认拓扑）：切到任何其他应用后整只桌宠从桌面消失，
+    点 Dock 图标把应用激活回来才重现——窗口只是被移出屏幕，进程并没退出。
+
+    legacy ``PetWindow`` 一直调用 ``_keep_macos_tool_window_visible``
+    （pet/window.py），overlay 新架构落成时漏了这条，故本用例守在
+    ``OverlayWindow`` 构造处：darwin 上必须已经带上
+    ``WA_MacAlwaysShowToolWindow``。
+
+    断言走**真实构造的窗口**（不是源码文本）：漏调用时
+    ``testAttribute`` 为 False，红。
+    """
+    import pet.platform_mac as platform_mac
+
+    monkeypatch.setattr(platform_mac.sys, "platform", "darwin")
+    overlay = OverlayWindow()
+    try:
+        assert overlay.testAttribute(
+            Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow) is True
+    finally:
+        overlay.close()
+        overlay.deleteLater()
+
+
+def test_overlay_window_keeps_qt_tool_flag():
+    """前提守卫：上面那条修复只在窗口仍是 ``Qt.Tool`` 时才有意义。
+
+    若将来有人把 overlay 改成普通 ``Window``（例：为捕获软件可枚举），
+    macOS 失活隐藏的问题会自然消失，但同时也不该再依赖那个属性——
+    这条用例让那次改动必须显式面对它，而不是悄悄绕过。
+    """
+    overlay = OverlayWindow()
+    try:
+        assert overlay.windowFlags() & Qt.WindowType.Tool
+    finally:
+        overlay.close()
+        overlay.deleteLater()
